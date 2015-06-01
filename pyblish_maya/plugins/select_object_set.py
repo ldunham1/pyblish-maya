@@ -27,32 +27,67 @@ class SelectObjectSet(pyblish.api.Selector):
     version = (0, 1, 0)
 
     def process_context(self, context):
-        for objset in cmds.ls("*." + pyblish.api.config['identifier'],
-                              objectsOnly=True,
-                              type='objectSet',
-                              long=True):
-
-            name = cmds.ls(objset, long=False)[0]  # Use short name
+        # what about the other prerequisite attr?
+        # use recursive to account for namespaces
+        # ls, like almost everything else in maya, will return None if nothing valid to return
+        objSetList = cmds.ls("*." + pyblish.api.config['identifier'],
+                             objectsOnly=True,
+                             type='objectSet',
+                             recursive=True,
+                             long=True) or []
+        for objset in objSetList:
+            # use split to get the real shortname (not shortest unique name) incl namespaces
+            name = objSet.split('|')[-1].split(':')[-1]
             instance = context.create_instance(name=name)
             self.log.info("Adding instance: {0}".format(objset))
+            objsetNodeList = cmds.sets(objset, query=True)
+            if objsetNodeList:
+                # get the nodes longnames for comparison later
+                objsetNodeList = cmds.ls(objsetNodeList, long=True)
+                for node in objsetNodeList:
+                    if cmds.nodeType(node) == 'transform':
+                        descendents = cmds.listRelatives(node,
+                                                         allDescendents=True,
+                                                         fullPath=True) or []
+                        for descendent in descendents:
+                            # possibility of decendant also being a member of the set
+                            if decendant not in objsetNodeList:
+                                instance.add(descendent)
+    
+                    instance.add(node)
 
-            for node in cmds.sets(objset, query=True):
-                if cmds.nodeType(node) == 'transform':
-                    descendents = cmds.listRelatives(node,
-                                                     allDescendents=True,
-                                                     fullPath=True)
-                    for descendent in descendents:
-                        instance.add(descendent)
-
-                instance.add(node)
-
-            attrs = cmds.listAttr(objset, userDefined=True)
+            attrs = cmds.listAttr(objset, userDefined=True) or []
             for attr in attrs:
+                # compile for efficiency
+                attrPath = objset + "." + attr
+                # get type for correct get
+                attrType = cmds.getAttr(attrPath, typ=True)
+                # what about the other prerequisite attr?
                 if attr == pyblish.api.config['identifier']:
                     continue
 
                 try:
-                    value = cmds.getAttr(objset + "." + attr)
+                    # precompile attr types in a maya lib
+                    attributeTypes = {"parent": ["compound",
+                                                 "TdataCompound",
+                                                 "long2", "long3",
+                                                 "short2", "short3",
+                                                 "float2", "float3",
+                                                 "double2", "double3".
+                                                 "spectrum", "reflectance"],
+                                      "message": ["message",
+                                                  "mesh"]}
+                    # check for compound type attrs - parent & children returned in listAttr
+                    if attrType in attributeTypes["parent"]:
+                        # ignore parent type attrs
+                        continue
+                    # check for message type attrs (mesh, curve etc)
+                    elif attrType in attributeTypes["message"]:
+                        # does set_data account for objects?
+                        # if not use json(?) and supply an encoding arg to set_data
+                        value = cmds.listConnections(attrPath) or []
+                    else:
+                        value = cmds.getAttr(attrPath)
                 except:
                     continue
 
